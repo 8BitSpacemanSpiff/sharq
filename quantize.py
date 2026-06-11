@@ -56,6 +56,7 @@ def boa_fwrd(llm, calib_data, qconfigs, boa_opts: dict, hyperparams: dict, args)
                     wrappers[name].set_sharq_uniform_scale_online(
                         qconfigs["w_bits"],
                         qconfigs["sharq_zero_policy"],
+                        qconfigs["sharq_topk_candidates"],
                     )
                     selection = wrappers[name].sharq_selection
                     skipped = 0

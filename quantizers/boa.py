@@ -148,12 +148,17 @@ class BoA:
         self.sharq_zero_override = zero.detach().cpu()
 
 
-    def set_sharq_uniform_scale_online(self, bits, zero_policy):
-        self.sharq_selection = make_online_uniform_scale_selection(bits)
+    def set_sharq_uniform_scale_online(self, bits, zero_policy, topk=None):
         self.sharq_group_size = -1
         self.sharq_bits = bits
         self.sharq_zero_policy = zero_policy
-        self.sharq_online_candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
+        if topk is not None and topk > 0:
+            selection, _, _ = self.select_sharq_uniform_scale(bits, zero_policy, topk=topk)
+            candidates = selection.shortlisted_codebooks
+        else:
+            candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
+        self.sharq_selection = make_online_uniform_scale_selection(bits, candidates)
+        self.sharq_online_candidates = candidates
 
 
     def select_sharq_direct(self, bits, group_size, zero_policy, clip_grid, granularity="module"):
@@ -163,7 +168,7 @@ class BoA:
         return select_direct(W, H_col, bits, group_size, zero_policy, clip_grid, objective="hessian")
 
 
-    def select_sharq_uniform_scale(self, bits, zero_policy):
+    def select_sharq_uniform_scale(self, bits, zero_policy, topk=None):
         W, H_col, _ = self._prepare_tensors(clear=False)
         if self.qparam_comput == "MinMax":
             scale, zero = self.quantizer.find_params_H(W, None, search=False)
@@ -181,6 +186,7 @@ class BoA:
             self.quantizer.maxq.to(W.device),
             bits,
             zero_policy,
+            topk=topk,
         )
         return selection, scale, zero
 

@@ -104,7 +104,7 @@ def _quantize_with_scale(W, codebook, scale):
     return torch.where(scale == 0, torch.zeros_like(q), q)
 
 
-def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_policy="free"):
+def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_policy="free", topk=None):
     candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
     if not candidates:
         raise ValueError(f"No SHARQ candidates remain for zero_policy={zero_policy}")
@@ -121,9 +121,11 @@ def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_pol
     best_zero_scores = torch.full_like(best_scores, float("inf"))
     best_no_zero_scores = torch.full_like(best_scores, float("inf"))
 
+    candidate_totals = []
     for candidate_idx, candidate in enumerate(candidates):
         q = _quantize_with_scale(W, candidate, scale_full)
         scores = _score_rows_many_clips((q - W).unsqueeze(0), H_col).squeeze(0)
+        candidate_totals.append((float(scores.sum().item()), candidate))
         if 0 in candidate:
             best_zero_scores = torch.minimum(best_zero_scores, scores)
         else:
@@ -136,6 +138,10 @@ def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_pol
             best_candidate_idx,
         )
         del q, scores
+
+    candidate_totals.sort(key=lambda item: item[0])
+    if topk is not None and topk > 0:
+        candidates = [candidate for _, candidate in candidate_totals[:topk]]
 
     best_candidate_idx_cpu = best_candidate_idx.cpu()
     channel_codebooks = []
@@ -168,10 +174,11 @@ def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_pol
         channel_codebooks=channel_codebooks,
         channel_clips=torch.ones((n_heads, n_rows), dtype=torch.float32),
         channel_uniform_score=uniform_scores.cpu(),
+        shortlisted_codebooks=[tuple(int(z) for z in candidate) for candidate in candidates],
     )
 
 
-def make_online_uniform_scale_selection(bits):
+def make_online_uniform_scale_selection(bits, shortlisted_codebooks=None):
     return SelectionResult(
         codebook=tuple(),
         clip=1.0,
@@ -181,6 +188,7 @@ def make_online_uniform_scale_selection(bits):
         selector="uniform_scale_online",
         codebook_granularity="channel",
         online_uniform_scale=True,
+        shortlisted_codebooks=shortlisted_codebooks,
     )
 
 

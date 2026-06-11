@@ -96,3 +96,5 @@ def test_uniform_scale_selector_reports_channel_choices():
     assert result.codebook_granularity == "channel"
     assert len(result.channel_codebooks[0]) == 2
     assert result.channel_uniform_score.shape == (1, 2)
+    top1 = select_uniform_scale_channelwise(W, H, scale, zero, torch.tensor(7), bits=3, zero_policy="free", topk=1)
+    assert len(top1.shortlisted_codebooks) == 1

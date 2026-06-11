@@ -31,6 +31,7 @@ def get_boa_arguments(**parser_kwargs):
     parser.add_argument('--sharq_clip_min', type=float, default=None)
     parser.add_argument('--sharq_clip_max', type=float, default=None)
     parser.add_argument('--sharq_clip_steps', type=int, default=None)
+    parser.add_argument('--sharq_topk_candidates', type=int, default=0)
     
     ## BoA Options
     parser.add_argument('--qparam_comput', type=str, default='Hessian', choices=['MinMax', 'MMSE', 'Hessian'], help="How to determine Quant. Params")
@@ -72,6 +73,7 @@ def get_boa_weight_quant_infos(args):
         "sharq_clip_min": args.sharq_clip_min,
         "sharq_clip_max": args.sharq_clip_max,
         "sharq_clip_steps": args.sharq_clip_steps,
+        "sharq_topk_candidates": args.sharq_topk_candidates,
     }
     boa_opts = {
         "qparam_comput": args.qparam_comput,
