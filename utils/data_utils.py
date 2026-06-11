@@ -55,7 +55,7 @@ def get_loaders(tokenizer, name, nsamples, seqlen, seed, mode="train"):
 
 def get_wikitext2(tokenizer, nsamples, seqlen, mode="train"):
     if mode == "train":
-        traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+        traindata = load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1', split='train')
         trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')
         trainloader = []
         for _ in range(nsamples):
@@ -69,7 +69,7 @@ def get_wikitext2(tokenizer, nsamples, seqlen, mode="train"):
         return trainloader
 
     else:
-        testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+        testdata = load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1', split='test')
         testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt').input_ids
         nsamples = testenc.numel() // seqlen
         testloader = []
