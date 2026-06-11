@@ -45,6 +45,8 @@ def write_selection_artifacts(out_dir, records):
                 for head in result.channel_codebooks
             ]
             selection[name]["channel_clips"] = result.channel_clips.tolist()
+            if result.channel_uniform_score is not None:
+                selection[name]["channel_uniform_score"] = result.channel_uniform_score.tolist()
         else:
             hw_meta.append(hardware_record(name, bits, result.codebook, result.clip))
     (out / "selection.json").write_text(json.dumps(selection, indent=2), encoding="utf-8")

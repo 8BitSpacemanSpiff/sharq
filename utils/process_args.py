@@ -22,7 +22,7 @@ def get_boa_arguments(**parser_kwargs):
     parser.add_argument('--w_bits', type=int, default=2)
     parser.add_argument('--w_sym', action="store_true")
     parser.add_argument('--codebook', type=str, default='uniform', choices=['uniform', 'sharq'])
-    parser.add_argument('--sharq_selector', type=str, default='direct', choices=['direct', 'histogram'])
+    parser.add_argument('--sharq_selector', type=str, default='direct', choices=['direct', 'histogram', 'uniform_scale'])
     parser.add_argument('--sharq_codebook_granularity', type=str, default='module', choices=['module', 'channel'])
     parser.add_argument('--sharq_group_size', type=int, default=128)
     parser.add_argument('--sharq_hist_bins', type=int, default=1024)

@@ -2,7 +2,7 @@ import torch
 
 from sharq.candidates import dedupe, enumerate_candidates
 from sharq.constants import DECOMP, LEGAL_LEVELS
-from sharq.direct import select_direct, select_direct_channelwise
+from sharq.direct import select_direct, select_direct_channelwise, select_uniform_scale_channelwise
 from sharq.histograms import build_histogram
 from sharq.quantizer import build_signed_levels, quantize_to_codebook
 from sharq.scoring import score_all
@@ -84,3 +84,15 @@ def test_direct_channelwise_selector_returns_valid_result():
     assert len(result.channel_codebooks[0]) == 2
     assert all(0 in codebook for codebook in result.channel_codebooks[0])
     assert result.channel_clips.shape == (1, 2)
+
+
+def test_uniform_scale_selector_reports_channel_choices():
+    W = torch.tensor([[[0.0, 0.1, -0.5, 1.0], [0.0, -0.2, 0.4, -0.8]]])
+    H = torch.eye(4).unsqueeze(0)
+    scale = torch.ones(1, 2, 1) / 7
+    zero = torch.full_like(scale, 4)
+    result = select_uniform_scale_channelwise(W, H, scale, zero, torch.tensor(7), bits=3, zero_policy="free")
+    assert result.selector == "uniform_scale"
+    assert result.codebook_granularity == "channel"
+    assert len(result.channel_codebooks[0]) == 2
+    assert result.channel_uniform_score.shape == (1, 2)

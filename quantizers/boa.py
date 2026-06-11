@@ -3,7 +3,7 @@ import torch
 from quantizers.utils import get_cholesky_of_inverse, reorder_col, reverse_reorder_col, reorder_row, reverse_reorder_row
 from utils.quant_utils import fake_quantize, filter_dead_neuron, damping
 from utils.utils import cleanup_memory
-from sharq.direct import select_direct, select_direct_channelwise
+from sharq.direct import select_direct, select_direct_channelwise, select_uniform_scale_channelwise
 from sharq.quantizer import build_signed_levels, quantize_to_codebook
 
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -20,6 +20,8 @@ class BoA:
         self.H_row = None
         self.sharq_selection = None
         self.sharq_group_size = -1
+        self.sharq_scale_override = None
+        self.sharq_zero_override = None
 
         self.qparam_comput = opts['qparam_comput']
         self.act_order_col = opts['act_order_col']
@@ -48,7 +50,10 @@ class BoA:
         else:
             if self.act_order_col:
                 raise NotImplementedError("SHARQ group-wise scales do not yet support act_order_col.")
-            scale, zero = self._find_sharq_params(W)
+            if self.sharq_scale_override is not None:
+                scale, zero = self.sharq_scale_override.to(W.device), self.sharq_zero_override.to(W.device)
+            else:
+                scale, zero = self._find_sharq_params(W)
 
         # Hessian-based re-ordering for columns
         if self.act_order_col:
@@ -129,6 +134,13 @@ class BoA:
         self.sharq_group_size = group_size
 
 
+    def set_sharq_with_uniform_scale(self, selection, scale, zero):
+        self.sharq_selection = selection
+        self.sharq_group_size = -1
+        self.sharq_scale_override = scale.detach().cpu()
+        self.sharq_zero_override = zero.detach().cpu()
+
+
     def select_sharq_direct(self, bits, group_size, zero_policy, clip_grid, granularity="module"):
         W, H_col, _ = self._prepare_tensors(clear=False)
         if granularity == "channel":
@@ -136,21 +148,46 @@ class BoA:
         return select_direct(W, H_col, bits, group_size, zero_policy, clip_grid, objective="hessian")
 
 
+    def select_sharq_uniform_scale(self, bits, zero_policy):
+        W, H_col, _ = self._prepare_tensors(clear=False)
+        if self.qparam_comput == "MinMax":
+            scale, zero = self.quantizer.find_params_H(W, None, search=False)
+        elif self.qparam_comput == "MMSE":
+            scale, zero = self.quantizer.find_params_H(W, None, search=True)
+        elif self.qparam_comput == "Hessian":
+            scale, zero = self.quantizer.find_params_H(W, H_col, search=True)
+        else:
+            raise NotImplementedError()
+        selection = select_uniform_scale_channelwise(
+            W,
+            H_col,
+            scale,
+            zero,
+            self.quantizer.maxq.to(W.device),
+            bits,
+            zero_policy,
+        )
+        return selection, scale, zero
+
+
     def _fake_quantize(self, w, scale, zero, row_offset=0):
         if self.sharq_selection is None:
             return fake_quantize(w, scale, zero, self.quantizer.maxq)
         if self.sharq_selection.codebook_granularity == "channel":
-            return self._fake_quantize_channelwise(w, scale, row_offset)
+            return self._fake_quantize_channelwise(w, scale, zero, row_offset)
         levels = build_signed_levels(self.sharq_selection.codebook, device=w.device, dtype=w.dtype)
         q, _ = quantize_to_codebook(w, scale, levels)
         return q
 
 
-    def _fake_quantize_channelwise(self, w, scale, row_offset):
+    def _fake_quantize_channelwise(self, w, scale, zero, row_offset):
         q = torch.empty_like(w)
         for h, head_codebooks in enumerate(self.sharq_selection.channel_codebooks):
             for r in range(w.shape[1]):
                 codebook = head_codebooks[row_offset + r]
+                if len(codebook) == 0:
+                    q[h, r, :] = fake_quantize(w[h, r, :], scale[h, r, :], zero[h, r, :], self.quantizer.maxq)
+                    continue
                 levels = build_signed_levels(codebook, device=w.device, dtype=w.dtype)
                 q[h, r, :], _ = quantize_to_codebook(w[h, r, :], scale[h, r, :], levels)
         return q

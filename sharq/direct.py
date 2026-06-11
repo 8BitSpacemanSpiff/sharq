@@ -3,6 +3,7 @@ import torch
 from sharq.candidates import deduped_representatives, filter_by_zero_policy
 from sharq.constants import CLIP_GRID
 from sharq.scoring import SelectionResult
+from utils.quant_utils import fake_quantize
 
 
 def _expanded_group_scales(W, codebook, clip, group_size):
@@ -84,6 +85,90 @@ def _score_row(err, H):
 
 def _score_rows_many_clips(err, H_col):
     return torch.einsum("chri,hij,chrj->chr", err, H_col, err).double()
+
+
+def _quantize_with_scale(W, codebook, scale):
+    safe_scale = torch.clamp(scale, min=torch.finfo(W.dtype).tiny)
+    t = W / safe_scale
+    levels = torch.tensor(
+        sorted(set([-int(z) for z in codebook] + [int(z) for z in codebook])),
+        dtype=W.dtype,
+        device=W.device,
+    )
+    idx_right = torch.searchsorted(levels.contiguous(), t.contiguous()).clamp(max=levels.numel() - 1)
+    idx_left = (idx_right - 1).clamp(min=0)
+    left = levels[idx_left]
+    right = levels[idx_right]
+    idx = torch.where((t - left).abs() <= (right - t).abs(), idx_left, idx_right)
+    q = safe_scale * levels[idx]
+    return torch.where(scale == 0, torch.zeros_like(q), q)
+
+
+def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_policy="free"):
+    candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
+    if not candidates:
+        raise ValueError(f"No SHARQ candidates remain for zero_policy={zero_policy}")
+    if len(H_col.shape) == 2:
+        H_col = H_col.unsqueeze(0)
+
+    n_heads, n_rows, n_cols = W.shape
+    scale_full = scale.expand(*W.shape[:-1], 1).expand_as(W)
+    uniform_q = fake_quantize(W, scale, zero, maxq)
+    uniform_scores = _score_rows_many_clips((uniform_q - W).unsqueeze(0), H_col).squeeze(0)
+
+    best_scores = uniform_scores.clone()
+    best_candidate_idx = torch.full((n_heads, n_rows), -1, dtype=torch.long, device=W.device)
+    best_zero_scores = torch.full_like(best_scores, float("inf"))
+    best_no_zero_scores = torch.full_like(best_scores, float("inf"))
+
+    for candidate_idx, candidate in enumerate(candidates):
+        q = _quantize_with_scale(W, candidate, scale_full)
+        scores = _score_rows_many_clips((q - W).unsqueeze(0), H_col).squeeze(0)
+        if 0 in candidate:
+            best_zero_scores = torch.minimum(best_zero_scores, scores)
+        else:
+            best_no_zero_scores = torch.minimum(best_no_zero_scores, scores)
+        update = scores < best_scores
+        best_scores = torch.where(update, scores, best_scores)
+        best_candidate_idx = torch.where(
+            update,
+            torch.full_like(best_candidate_idx, candidate_idx),
+            best_candidate_idx,
+        )
+        del q, scores
+
+    best_candidate_idx_cpu = best_candidate_idx.cpu()
+    channel_codebooks = []
+    improved = int((best_candidate_idx >= 0).sum().item())
+    for h in range(n_heads):
+        head_codebooks = []
+        for r in range(n_rows):
+            idx = int(best_candidate_idx_cpu[h, r].item())
+            if idx >= 0:
+                head_codebooks.append(tuple(int(z) for z in candidates[idx]))
+            else:
+                head_codebooks.append(tuple())
+        channel_codebooks.append(head_codebooks)
+
+    print(
+        ">>> SHARQ/uniform_scale: "
+        f"improved_channels={improved}/{n_heads * n_rows}, "
+        f"uniform_score={float(uniform_scores.sum().item()):.6e}, "
+        f"best_score={float(best_scores.sum().item()):.6e}"
+    )
+
+    return SelectionResult(
+        codebook=tuple(),
+        clip=1.0,
+        score=float(best_scores.sum().item()),
+        best_zero_score=float(best_zero_scores.sum().item()),
+        best_no_zero_score=float(best_no_zero_scores.sum().item()),
+        selector="uniform_scale",
+        codebook_granularity="channel",
+        channel_codebooks=channel_codebooks,
+        channel_clips=torch.ones((n_heads, n_rows), dtype=torch.float32),
+        channel_uniform_score=uniform_scores.cpu(),
+    )
 
 
 def select_direct(W, H_col, bits, group_size=-1, zero_policy="free", clip_grid=None, objective="hessian"):
