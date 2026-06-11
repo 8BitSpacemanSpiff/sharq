@@ -53,11 +53,11 @@ def boa_fwrd(llm, calib_data, qconfigs, boa_opts: dict, hyperparams: dict, args)
             for name in fp_layers:
                 module_name = f"layers.{i}.{name}"
                 if qconfigs["sharq_selector"] == "uniform_scale":
-                    selection, scale, zero = wrappers[name].select_sharq_uniform_scale(
+                    wrappers[name].set_sharq_uniform_scale_online(
                         qconfigs["w_bits"],
                         qconfigs["sharq_zero_policy"],
                     )
-                    wrappers[name].set_sharq_with_uniform_scale(selection, scale, zero)
+                    selection = wrappers[name].sharq_selection
                     skipped = 0
                 elif qconfigs["sharq_selector"] == "direct":
                     selection = wrappers[name].select_sharq_direct(
@@ -84,7 +84,12 @@ def boa_fwrd(llm, calib_data, qconfigs, boa_opts: dict, hyperparams: dict, args)
                     f"score={selection.score:.6e}, skipped_groups={skipped}"
                 )
                 if qconfigs["sharq_selector"] != "uniform_scale":
-                    wrappers[name].set_sharq(selection, qconfigs["sharq_group_size"])
+                    wrappers[name].set_sharq(
+                        selection,
+                        qconfigs["sharq_group_size"],
+                        bits=qconfigs["w_bits"],
+                        zero_policy=qconfigs["sharq_zero_policy"],
+                    )
                 sharq_records.append((module_name, selection, qconfigs["w_bits"]))
 
         # quantize

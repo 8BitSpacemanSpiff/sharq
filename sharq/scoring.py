@@ -18,6 +18,7 @@ class SelectionResult:
     channel_codebooks: list | None = None
     channel_clips: object | None = None
     channel_uniform_score: object | None = None
+    online_uniform_scale: bool = False
 
 
 def score_all(hist, bin_centers, candidates, clip_grid):

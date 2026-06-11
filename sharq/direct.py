@@ -171,6 +171,19 @@ def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_pol
     )
 
 
+def make_online_uniform_scale_selection(bits):
+    return SelectionResult(
+        codebook=tuple(),
+        clip=1.0,
+        score=0.0,
+        best_zero_score=0.0,
+        best_no_zero_score=0.0,
+        selector="uniform_scale_online",
+        codebook_granularity="channel",
+        online_uniform_scale=True,
+    )
+
+
 def select_direct(W, H_col, bits, group_size=-1, zero_policy="free", clip_grid=None, objective="hessian"):
     candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
     if not candidates:

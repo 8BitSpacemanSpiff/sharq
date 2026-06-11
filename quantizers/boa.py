@@ -3,7 +3,8 @@ import torch
 from quantizers.utils import get_cholesky_of_inverse, reorder_col, reverse_reorder_col, reorder_row, reverse_reorder_row
 from utils.quant_utils import fake_quantize, filter_dead_neuron, damping
 from utils.utils import cleanup_memory
-from sharq.direct import select_direct, select_direct_channelwise, select_uniform_scale_channelwise
+from sharq.candidates import deduped_representatives, filter_by_zero_policy
+from sharq.direct import make_online_uniform_scale_selection, select_direct, select_direct_channelwise, select_uniform_scale_channelwise
 from sharq.quantizer import build_signed_levels, quantize_to_codebook
 
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -22,6 +23,9 @@ class BoA:
         self.sharq_group_size = -1
         self.sharq_scale_override = None
         self.sharq_zero_override = None
+        self.sharq_bits = None
+        self.sharq_zero_policy = "free"
+        self.sharq_online_candidates = None
 
         self.qparam_comput = opts['qparam_comput']
         self.act_order_col = opts['act_order_col']
@@ -36,7 +40,7 @@ class BoA:
         W, H_col, H_row = self.preprocess()
         
         # compute quantization grid
-        if self.sharq_selection is None:
+        if self.sharq_selection is None or self.sharq_selection.online_uniform_scale:
             if self.qparam_comput == "MinMax":
                 scale, zero = self.quantizer.find_params_H(W, None, search=False)
             elif self.qparam_comput == "MMSE":
@@ -45,8 +49,9 @@ class BoA:
                 scale, zero = self.quantizer.find_params_H(W, H_col, search=True)
             else:
                 raise NotImplementedError()
-            self.quantizer.scale = scale.reshape(self.quantizer.scale.shape)
-            self.quantizer.zero = zero.reshape(self.quantizer.zero.shape)
+            if self.sharq_selection is None:
+                self.quantizer.scale = scale.reshape(self.quantizer.scale.shape)
+                self.quantizer.zero = zero.reshape(self.quantizer.zero.shape)
         else:
             if self.act_order_col:
                 raise NotImplementedError("SHARQ group-wise scales do not yet support act_order_col.")
@@ -129,9 +134,11 @@ class BoA:
         return Q
 
 
-    def set_sharq(self, selection, group_size):
+    def set_sharq(self, selection, group_size, bits=None, zero_policy="free"):
         self.sharq_selection = selection
         self.sharq_group_size = group_size
+        self.sharq_bits = bits
+        self.sharq_zero_policy = zero_policy
 
 
     def set_sharq_with_uniform_scale(self, selection, scale, zero):
@@ -139,6 +146,14 @@ class BoA:
         self.sharq_group_size = -1
         self.sharq_scale_override = scale.detach().cpu()
         self.sharq_zero_override = zero.detach().cpu()
+
+
+    def set_sharq_uniform_scale_online(self, bits, zero_policy):
+        self.sharq_selection = make_online_uniform_scale_selection(bits)
+        self.sharq_group_size = -1
+        self.sharq_bits = bits
+        self.sharq_zero_policy = zero_policy
+        self.sharq_online_candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
 
 
     def select_sharq_direct(self, bits, group_size, zero_policy, clip_grid, granularity="module"):
@@ -173,11 +188,34 @@ class BoA:
     def _fake_quantize(self, w, scale, zero, row_offset=0):
         if self.sharq_selection is None:
             return fake_quantize(w, scale, zero, self.quantizer.maxq)
+        if self.sharq_selection.online_uniform_scale:
+            return self._fake_quantize_uniform_scale_online(w, scale, zero)
         if self.sharq_selection.codebook_granularity == "channel":
             return self._fake_quantize_channelwise(w, scale, zero, row_offset)
         levels = build_signed_levels(self.sharq_selection.codebook, device=w.device, dtype=w.dtype)
         q, _ = quantize_to_codebook(w, scale, levels)
         return q
+
+
+    def _fake_quantize_uniform_scale_online(self, w, scale, zero):
+        uniform_q = fake_quantize(w, scale, zero, self.quantizer.maxq)
+        best_q = uniform_q.clone()
+        best_err = (uniform_q - w).abs()
+        safe_scale = torch.clamp(scale, min=torch.finfo(w.dtype).tiny)
+        t = w / safe_scale
+        for codebook in self.sharq_online_candidates:
+            levels = build_signed_levels(codebook, device=w.device, dtype=w.dtype)
+            idx_right = torch.searchsorted(levels.contiguous(), t.contiguous()).clamp(max=levels.numel() - 1)
+            idx_left = (idx_right - 1).clamp(min=0)
+            left = levels[idx_left]
+            right = levels[idx_right]
+            idx = torch.where((t - left).abs() <= (right - t).abs(), idx_left, idx_right)
+            q = safe_scale * levels[idx]
+            err = (q - w).abs()
+            update = err < best_err
+            best_err = torch.where(update, err, best_err)
+            best_q = torch.where(update, q, best_q)
+        return best_q
 
 
     def _fake_quantize_channelwise(self, w, scale, zero, row_offset):
