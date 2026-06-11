@@ -32,12 +32,20 @@ def write_selection_artifacts(out_dir, records):
         selection[name] = {
             "bits": int(bits),
             "selector": result.selector,
+            "codebook_granularity": result.codebook_granularity,
             "codebook": [int(z) for z in result.codebook],
             "clip": float(result.clip),
             "score": float(result.score),
             "best_zero_score": float(result.best_zero_score),
             "best_no_zero_score": float(result.best_no_zero_score),
         }
-        hw_meta.append(hardware_record(name, bits, result.codebook, result.clip))
+        if result.codebook_granularity == "channel":
+            selection[name]["channel_codebooks"] = [
+                [[int(z) for z in codebook] for codebook in head]
+                for head in result.channel_codebooks
+            ]
+            selection[name]["channel_clips"] = result.channel_clips.tolist()
+        else:
+            hw_meta.append(hardware_record(name, bits, result.codebook, result.clip))
     (out / "selection.json").write_text(json.dumps(selection, indent=2), encoding="utf-8")
     (out / "hw_meta.json").write_text(json.dumps(hw_meta, indent=2), encoding="utf-8")

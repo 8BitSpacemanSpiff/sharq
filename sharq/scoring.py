@@ -14,6 +14,9 @@ class SelectionResult:
     best_zero_score: float
     best_no_zero_score: float
     selector: str = "histogram"
+    codebook_granularity: str = "module"
+    channel_codebooks: list | None = None
+    channel_clips: object | None = None
 
 
 def score_all(hist, bin_centers, candidates, clip_grid):

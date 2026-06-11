@@ -51,6 +51,10 @@ def score_candidate_direct(W, H_col, codebook, clip, group_size, objective="hess
     raise ValueError(f"Unsupported direct SHARQ objective: {objective}")
 
 
+def _score_row(err, H):
+    return torch.sum((err @ H) * err).double()
+
+
 def select_direct(W, H_col, bits, group_size=-1, zero_policy="free", clip_grid=None, objective="hessian"):
     candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
     if not candidates:
@@ -87,3 +91,71 @@ def select_direct(W, H_col, bits, group_size=-1, zero_policy="free", clip_grid=N
     best.best_zero_score = best_zero_score
     best.best_no_zero_score = best_no_zero_score
     return best
+
+
+def select_direct_channelwise(W, H_col, bits, group_size=-1, zero_policy="free", clip_grid=None):
+    candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
+    if not candidates:
+        raise ValueError(f"No SHARQ candidates remain for zero_policy={zero_policy}")
+    if clip_grid is None:
+        clip_grid = CLIP_GRID[bits]
+    clip_grid = clip_grid.to(device=W.device, dtype=W.dtype)
+    if len(H_col.shape) == 2:
+        H_col = H_col.unsqueeze(0)
+
+    n_heads, n_rows, _ = W.shape
+    channel_codebooks = []
+    channel_clips = torch.empty((n_heads, n_rows), dtype=torch.float32, device=W.device)
+    total_score = 0.0
+    best_zero_score = 0.0
+    best_no_zero_score = 0.0
+
+    for h in range(n_heads):
+        head_codebooks = []
+        H = H_col[h]
+        for r in range(n_rows):
+            row = W[h:h + 1, r:r + 1, :]
+            row_best = None
+            row_best_zero = float("inf")
+            row_best_no_zero = float("inf")
+            for candidate in candidates:
+                candidate_best = float("inf")
+                candidate_best_clip = None
+                for clip in clip_grid:
+                    q = _quantize_direct(row, candidate, clip, group_size)
+                    score = float(_score_row(q.reshape(1, -1) - row.reshape(1, -1), H).item())
+                    if score < candidate_best:
+                        candidate_best = score
+                        candidate_best_clip = float(clip.item())
+                if 0 in candidate:
+                    row_best_zero = min(row_best_zero, candidate_best)
+                else:
+                    row_best_no_zero = min(row_best_no_zero, candidate_best)
+                if row_best is None or candidate_best < row_best.score:
+                    row_best = SelectionResult(
+                        codebook=tuple(int(z) for z in candidate),
+                        clip=candidate_best_clip,
+                        score=candidate_best,
+                        best_zero_score=row_best_zero,
+                        best_no_zero_score=row_best_no_zero,
+                        selector="direct",
+                        codebook_granularity="channel",
+                    )
+            head_codebooks.append(row_best.codebook)
+            channel_clips[h, r] = row_best.clip
+            total_score += row_best.score
+            best_zero_score += row_best_zero
+            best_no_zero_score += row_best_no_zero
+        channel_codebooks.append(head_codebooks)
+
+    return SelectionResult(
+        codebook=tuple(),
+        clip=float(channel_clips.float().mean().item()),
+        score=float(total_score),
+        best_zero_score=float(best_zero_score),
+        best_no_zero_score=float(best_no_zero_score),
+        selector="direct",
+        codebook_granularity="channel",
+        channel_codebooks=channel_codebooks,
+        channel_clips=channel_clips.cpu(),
+    )

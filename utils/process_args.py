@@ -23,6 +23,7 @@ def get_boa_arguments(**parser_kwargs):
     parser.add_argument('--w_sym', action="store_true")
     parser.add_argument('--codebook', type=str, default='uniform', choices=['uniform', 'sharq'])
     parser.add_argument('--sharq_selector', type=str, default='direct', choices=['direct', 'histogram'])
+    parser.add_argument('--sharq_codebook_granularity', type=str, default='module', choices=['module', 'channel'])
     parser.add_argument('--sharq_group_size', type=int, default=128)
     parser.add_argument('--sharq_hist_bins', type=int, default=1024)
     parser.add_argument('--sharq_out', type=str, default=None)
@@ -64,6 +65,7 @@ def get_boa_weight_quant_infos(args):
         "w_sym": args.w_sym,
         "codebook": args.codebook,
         "sharq_selector": args.sharq_selector,
+        "sharq_codebook_granularity": args.sharq_codebook_granularity,
         "sharq_group_size": args.sharq_group_size,
         "sharq_hist_bins": args.sharq_hist_bins,
         "sharq_zero_policy": args.sharq_zero_policy,

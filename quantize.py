@@ -58,6 +58,7 @@ def boa_fwrd(llm, calib_data, qconfigs, boa_opts: dict, hyperparams: dict, args)
                         qconfigs["sharq_group_size"],
                         qconfigs["sharq_zero_policy"],
                         sharq_clip_grid,
+                        qconfigs["sharq_codebook_granularity"],
                     )
                     skipped = 0
                 else:
@@ -72,7 +73,8 @@ def boa_fwrd(llm, calib_data, qconfigs, boa_opts: dict, hyperparams: dict, args)
                     )
                 print(
                     f">>> SHARQ/{selection.selector} {module_name}: codebook={selection.codebook}, "
-                    f"clip={selection.clip:.4f}, score={selection.score:.6e}, skipped_groups={skipped}"
+                    f"granularity={selection.codebook_granularity}, clip={selection.clip:.4f}, "
+                    f"score={selection.score:.6e}, skipped_groups={skipped}"
                 )
                 wrappers[name].set_sharq(selection, qconfigs["sharq_group_size"])
                 sharq_records.append((module_name, selection, qconfigs["w_bits"]))

@@ -3,7 +3,7 @@ import torch
 from quantizers.utils import get_cholesky_of_inverse, reorder_col, reverse_reorder_col, reorder_row, reverse_reorder_row
 from utils.quant_utils import fake_quantize, filter_dead_neuron, damping
 from utils.utils import cleanup_memory
-from sharq.direct import select_direct
+from sharq.direct import select_direct, select_direct_channelwise
 from sharq.quantizer import build_signed_levels, quantize_to_codebook
 
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -122,16 +122,29 @@ class BoA:
         self.sharq_group_size = group_size
 
 
-    def select_sharq_direct(self, bits, group_size, zero_policy, clip_grid):
+    def select_sharq_direct(self, bits, group_size, zero_policy, clip_grid, granularity="module"):
         W, H_col, _ = self._prepare_tensors(clear=False)
+        if granularity == "channel":
+            return select_direct_channelwise(W, H_col, bits, group_size, zero_policy, clip_grid)
         return select_direct(W, H_col, bits, group_size, zero_policy, clip_grid, objective="hessian")
 
 
     def _fake_quantize(self, w, scale, zero):
         if self.sharq_selection is None:
             return fake_quantize(w, scale, zero, self.quantizer.maxq)
+        if self.sharq_selection.codebook_granularity == "channel":
+            return self._fake_quantize_channelwise(w, scale)
         levels = build_signed_levels(self.sharq_selection.codebook, device=w.device, dtype=w.dtype)
         q, _ = quantize_to_codebook(w, scale, levels)
+        return q
+
+
+    def _fake_quantize_channelwise(self, w, scale):
+        q = torch.empty_like(w)
+        for h, head_codebooks in enumerate(self.sharq_selection.channel_codebooks):
+            for r, codebook in enumerate(head_codebooks):
+                levels = build_signed_levels(codebook, device=w.device, dtype=w.dtype)
+                q[h, r, :], _ = quantize_to_codebook(w[h, r, :], scale[h, r, :], levels)
         return q
 
 
@@ -150,6 +163,16 @@ class BoA:
         n_groups = W.shape[-1] // group_size
         grouped = W.abs().view(*W.shape[:-1], n_groups, group_size)
         gmax = grouped.amax(dim=-1)
+        if self.sharq_selection.codebook_granularity == "channel":
+            clips = self.sharq_selection.channel_clips.to(device=W.device, dtype=W.dtype)
+            zmax = torch.tensor(
+                [[max(codebook) for codebook in head] for head in self.sharq_selection.channel_codebooks],
+                device=W.device,
+                dtype=W.dtype,
+            )
+            scale = gmax * clips.unsqueeze(-1) / zmax.unsqueeze(-1)
+            zero = torch.zeros_like(scale)
+            return scale, zero
         zmax = max(self.sharq_selection.codebook)
         scale = gmax.mul(float(self.sharq_selection.clip) / float(zmax))
         zero = torch.zeros_like(scale)

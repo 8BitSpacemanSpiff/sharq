@@ -2,7 +2,7 @@ import torch
 
 from sharq.candidates import dedupe, enumerate_candidates
 from sharq.constants import DECOMP, LEGAL_LEVELS
-from sharq.direct import select_direct
+from sharq.direct import select_direct, select_direct_channelwise
 from sharq.histograms import build_histogram
 from sharq.quantizer import build_signed_levels, quantize_to_codebook
 from sharq.scoring import score_all
@@ -72,3 +72,15 @@ def test_direct_selector_returns_valid_result():
     assert 0 in result.codebook
     assert len(result.codebook) == 4
     assert 0.75 <= result.clip <= 1.0
+
+
+def test_direct_channelwise_selector_returns_valid_result():
+    W = torch.tensor([[[0.0, 0.1, -0.5, 1.0], [0.0, -0.2, 0.4, -0.8]]])
+    H = torch.eye(4).unsqueeze(0)
+    result = select_direct_channelwise(W, H, bits=3, group_size=-1, zero_policy="force_zero")
+    assert result.selector == "direct"
+    assert result.codebook_granularity == "channel"
+    assert len(result.channel_codebooks) == 1
+    assert len(result.channel_codebooks[0]) == 2
+    assert all(0 in codebook for codebook in result.channel_codebooks[0])
+    assert result.channel_clips.shape == (1, 2)
