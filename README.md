@@ -71,6 +71,89 @@ Then compare against:
 python main.py --llm_path <same-model> --w_bits 4 --codebook sharq --sharq_out outputs/check
 ```
 
+## Llama 3.2 1B Accuracy Track
+
+Use this track for meaningful SHARQ comparisons. OPT-125M with tiny calibration
+is only a smoke test.
+
+If the Meta checkpoint is gated, authenticate first:
+
+```bash
+huggingface-cli login
+```
+
+or:
+
+```bash
+export HF_TOKEN=<your_token>
+```
+
+Full precision reference:
+
+```bash
+python main.py \
+  --llm_path meta-llama/Llama-3.2-1B \
+  --eval_fp \
+  --calib_data c4 \
+  --nsamples 128 \
+  --seqlen 2048
+```
+
+Uniform BoA W4 baseline:
+
+```bash
+python main.py \
+  --llm_path meta-llama/Llama-3.2-1B \
+  --w_bits 4 \
+  --codebook uniform \
+  --calib_data c4 \
+  --nsamples 128 \
+  --seqlen 2048 \
+  --qparam_comput Hessian \
+  --block_v
+```
+
+Uniform BoA W3 baseline:
+
+```bash
+python main.py \
+  --llm_path meta-llama/Llama-3.2-1B \
+  --w_bits 3 \
+  --codebook uniform \
+  --calib_data c4 \
+  --nsamples 128 \
+  --seqlen 2048 \
+  --qparam_comput Hessian \
+  --block_v
+```
+
+SHARQ W3 with the accuracy-first direct selector:
+
+```bash
+python main.py \
+  --llm_path meta-llama/Llama-3.2-1B \
+  --w_bits 3 \
+  --codebook sharq \
+  --sharq_selector direct \
+  --sharq_group_size -1 \
+  --sharq_zero_policy free \
+  --sharq_clip_min 0.40 \
+  --sharq_clip_max 1.00 \
+  --sharq_clip_steps 31 \
+  --sharq_out outputs/llama32-1b-sharq-w3-direct \
+  --calib_data c4 \
+  --nsamples 128 \
+  --seqlen 2048 \
+  --qparam_comput Hessian \
+  --block_v
+```
+
+If free zero/no-zero selection is unstable, rerun the same command with:
+
+```bash
+--sharq_zero_policy force_zero
+```
+
 The original BoA README follows for upstream context.
 
 # BoA
