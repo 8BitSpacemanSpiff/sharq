@@ -108,6 +108,7 @@ def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_pol
     candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
     if not candidates:
         raise ValueError(f"No SHARQ candidates remain for zero_policy={zero_policy}")
+    all_candidates = list(candidates)
     if len(H_col.shape) == 2:
         H_col = H_col.unsqueeze(0)
 
@@ -140,8 +141,9 @@ def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_pol
         del q, scores
 
     candidate_totals.sort(key=lambda item: item[0])
+    shortlisted = [candidate for _, candidate in candidate_totals]
     if topk is not None and topk > 0:
-        candidates = [candidate for _, candidate in candidate_totals[:topk]]
+        shortlisted = shortlisted[:topk]
 
     best_candidate_idx_cpu = best_candidate_idx.cpu()
     channel_codebooks = []
@@ -151,7 +153,7 @@ def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_pol
         for r in range(n_rows):
             idx = int(best_candidate_idx_cpu[h, r].item())
             if idx >= 0:
-                head_codebooks.append(tuple(int(z) for z in candidates[idx]))
+                head_codebooks.append(tuple(int(z) for z in all_candidates[idx]))
             else:
                 head_codebooks.append(tuple())
         channel_codebooks.append(head_codebooks)
@@ -174,7 +176,7 @@ def select_uniform_scale_channelwise(W, H_col, scale, zero, maxq, bits, zero_pol
         channel_codebooks=channel_codebooks,
         channel_clips=torch.ones((n_heads, n_rows), dtype=torch.float32),
         channel_uniform_score=uniform_scores.cpu(),
-        shortlisted_codebooks=[tuple(int(z) for z in candidate) for candidate in candidates],
+        shortlisted_codebooks=[tuple(int(z) for z in candidate) for candidate in shortlisted],
     )
 
 
