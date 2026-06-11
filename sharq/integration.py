@@ -40,11 +40,13 @@ def write_selection_artifacts(out_dir, records):
             "best_no_zero_score": float(result.best_no_zero_score),
         }
         if result.codebook_granularity == "channel":
-            selection[name]["channel_codebooks"] = [
-                [[int(z) for z in codebook] for codebook in head]
-                for head in result.channel_codebooks
-            ]
-            selection[name]["channel_clips"] = result.channel_clips.tolist()
+            if result.channel_codebooks is not None:
+                selection[name]["channel_codebooks"] = [
+                    [[int(z) for z in codebook] for codebook in head]
+                    for head in result.channel_codebooks
+                ]
+            if result.channel_clips is not None:
+                selection[name]["channel_clips"] = result.channel_clips.tolist()
             if result.channel_uniform_score is not None:
                 selection[name]["channel_uniform_score"] = result.channel_uniform_score.tolist()
             if result.shortlisted_codebooks is not None:
