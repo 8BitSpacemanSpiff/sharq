@@ -3,10 +3,23 @@
 This repository maintains SHARQ (SHift-Add Routed Quantization) on top of the
 SamsungLabs BoA post-training quantization codebase.
 
-SHARQ adds a hardware-legal non-uniform codebook pre-pass and changes BoA's
-rounding target from a uniform integer grid to the selected shift-add codebook.
-The BoA compensation logic, Hessian handling, and block traversal remain the
-upstream implementation.
+SHARQ explores hardware-legal non-uniform alternatives to BoA's uniform weight
+bins. The current accuracy-first path keeps BoA's original scale/zero grid
+search, then compares uniform bins against shortlisted SHARQ codebooks inside
+BoA's column-wise quantize-and-compensate loop. This matters because BoA mutates
+the remaining weights after every compensated column, so codebook decisions made
+before the loop can become stale.
+
+The hardware-legal magnitude family is:
+
+```text
+{0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 12}
+```
+
+Each level is expressible as the sum of at most two shift terms from
+`{1, 2, 4, 8}`. The original hardware story is still preserved as a target, but
+the present research priority is accuracy first, then hardware constraints, then
+runtime optimization.
 
 ## SHARQ usage
 
@@ -16,17 +29,17 @@ Uniform BoA remains the default:
 python main.py --llm_path <model> --w_bits 4 --codebook uniform
 ```
 
-Run SHARQ codebook selection and BoA quantization:
+Run SHARQ with the current accuracy-first online selector:
 
 ```bash
 python main.py \
   --llm_path <model> \
-  --w_bits 4 \
+  --w_bits 3 \
   --codebook sharq \
-  --sharq_selector direct \
-  --sharq_group_size 128 \
-  --sharq_hist_bins 1024 \
-  --sharq_out outputs/sharq-w4
+  --sharq_selector uniform_scale \
+  --sharq_zero_policy free \
+  --sharq_topk_candidates 1 \
+  --sharq_out outputs/sharq-w3-online-top1
 ```
 
 `--sharq_out` writes:
@@ -36,19 +49,58 @@ python main.py \
 - `hw_meta.json`: hardware routing metadata, including the enable table derived
   from the legal shift-add decomposition.
 
+## Current Algorithm Flow
+
+For `--sharq_selector uniform_scale`, SHARQ runs as follows:
+
+1. BoA computes Hessian/statistics as usual.
+2. BoA runs its original uniform grid search to choose per-channel scale and
+   zero-point.
+3. SHARQ ranks legal codebooks using that uniform-scale view and keeps the top
+   `--sharq_topk_candidates` codebooks as a shortlist.
+4. Inside BoA's actual column-wise compensation loop, for the current compensated
+   weight column:
+   - compute the original uniform quantized value;
+   - compute candidate SHARQ values using the same scale;
+   - choose the closest value elementwise;
+   - feed that quantized value into BoA's normal error compensation update.
+5. Evaluation runs exactly as in upstream BoA.
+
+This online choice is slower than uniform quantization, but it avoids the stale
+pre-pass problem where a codebook is chosen before BoA has updated the remaining
+weights.
+
+Other selectors are still available for ablations:
+
+- `--sharq_selector histogram`: older fast histogram proxy.
+- `--sharq_selector direct`: scores full codebooks before the BoA loop.
+- `--sharq_selector uniform_scale`: current online accuracy-first path.
+
 Current implementation notes:
 
 - Supported SHARQ bitwidths are W4, W3, and W2.
-- Legal magnitude levels are `{0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 12}`.
 - Zero-inclusive and no-zero codebooks compete in the same exhaustive search.
 - SHARQ currently disables `--act_order_col` because column reordering needs an
   additional permutation-aware mapping for group-wise input scales.
 - The core SHARQ modules live under `sharq/`; BoA is patched only at the
   quantization target boundary in `quantizers/boa.py`.
-- `--sharq_selector direct` is the accuracy-first selector. It scores each
-  candidate codebook on the actual BoA-preprocessed weights with BoA's Hessian
-  objective. `--sharq_selector histogram` keeps the earlier fast proxy for
-  ablations and optimization work.
+
+## OPT-125M Smoke Result
+
+These are not paper-quality numbers, but they are useful for checking the method
+before moving to Llama 3.2 1B.
+
+Setup: OPT-125M, W3, WikiText-2 calibration, `nsamples=16`, `seqlen=512`, no
+`block_v`, no activation reordering.
+
+| Method | WikiText-2 PPL | C4-new PPL | Time |
+| - | -: | -: | -: |
+| Uniform BoA W3 | 46.298 | 39.968 | 291.153s |
+| SHARQ online top-1 | 44.124 | 36.621 | 703.326s |
+| SHARQ online top-3 | 44.129 | 35.553 | 1321.036s |
+
+Top-1 is the practical setting. Top-3 gives better C4-new PPL, but is much
+slower.
 
 ## Validation
 
@@ -127,23 +179,57 @@ python main.py \
   --block_v
 ```
 
-SHARQ W3 with the accuracy-first direct selector:
+SHARQ W3 online top-1:
 
 ```bash
 python main.py \
   --llm_path meta-llama/Llama-3.2-1B \
   --w_bits 3 \
   --codebook sharq \
-  --sharq_selector direct \
-  --sharq_group_size -1 \
+  --sharq_selector uniform_scale \
   --sharq_zero_policy free \
-  --sharq_clip_min 0.40 \
-  --sharq_clip_max 1.00 \
-  --sharq_clip_steps 31 \
-  --sharq_out outputs/llama32-1b-sharq-w3-direct \
+  --sharq_topk_candidates 1 \
+  --sharq_out outputs/llama32-1b-sharq-w3-online-top1 \
   --calib_data c4 \
   --nsamples 128 \
   --seqlen 2048 \
+  --qparam_comput Hessian \
+  --block_v
+```
+
+SHARQ W3 online top-3:
+
+```bash
+python main.py \
+  --llm_path meta-llama/Llama-3.2-1B \
+  --w_bits 3 \
+  --codebook sharq \
+  --sharq_selector uniform_scale \
+  --sharq_zero_policy free \
+  --sharq_topk_candidates 3 \
+  --sharq_out outputs/llama32-1b-sharq-w3-online-top3 \
+  --calib_data c4 \
+  --nsamples 128 \
+  --seqlen 2048 \
+  --qparam_comput Hessian \
+  --block_v
+```
+
+If the full setting is too slow for the first Llama run, use an intermediate
+calibration size:
+
+```bash
+python main.py \
+  --llm_path meta-llama/Llama-3.2-1B \
+  --w_bits 3 \
+  --codebook sharq \
+  --sharq_selector uniform_scale \
+  --sharq_zero_policy free \
+  --sharq_topk_candidates 1 \
+  --sharq_out outputs/llama32-1b-sharq-w3-online-top1-smoke \
+  --calib_data c4 \
+  --nsamples 32 \
+  --seqlen 1024 \
   --qparam_comput Hessian \
   --block_v
 ```
