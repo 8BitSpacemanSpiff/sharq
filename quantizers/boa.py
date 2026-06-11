@@ -3,6 +3,7 @@ import torch
 from quantizers.utils import get_cholesky_of_inverse, reorder_col, reverse_reorder_col, reorder_row, reverse_reorder_row
 from utils.quant_utils import fake_quantize, filter_dead_neuron, damping
 from utils.utils import cleanup_memory
+from sharq.direct import select_direct
 from sharq.quantizer import build_signed_levels, quantize_to_codebook
 
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -121,6 +122,11 @@ class BoA:
         self.sharq_group_size = group_size
 
 
+    def select_sharq_direct(self, bits, group_size, zero_policy, clip_grid):
+        W, H_col, _ = self._prepare_tensors(clear=False)
+        return select_direct(W, H_col, bits, group_size, zero_policy, clip_grid, objective="hessian")
+
+
     def _fake_quantize(self, w, scale, zero):
         if self.sharq_selection is None:
             return fake_quantize(w, scale, zero, self.quantizer.maxq)
@@ -151,6 +157,10 @@ class BoA:
     
 
     def preprocess(self):
+        return self._prepare_tensors(clear=True)
+
+
+    def _prepare_tensors(self, clear):
         W = self.layer.weight.data.clone()
         W = W.float()
 
@@ -166,8 +176,9 @@ class BoA:
         head_dim = W.shape[0] // n_heads
         W = W.view(n_heads, head_dim, hidden_size)
 
-        self.H_col = None
-        self.H_row = None
+        if clear:
+            self.H_col = None
+            self.H_row = None
 
         return W, H_col, H_row
 

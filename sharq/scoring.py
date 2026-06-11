@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import torch
 
-from sharq.candidates import deduped_representatives
+from sharq.candidates import deduped_representatives, filter_by_zero_policy
 from sharq.constants import CLIP_GRID
 
 
@@ -13,6 +13,7 @@ class SelectionResult:
     score: float
     best_zero_score: float
     best_no_zero_score: float
+    selector: str = "histogram"
 
 
 def score_all(hist, bin_centers, candidates, clip_grid):
@@ -31,13 +32,7 @@ def score_all(hist, bin_centers, candidates, clip_grid):
 
 
 def select(hist, bin_centers, bits, zero_policy="free", clip_grid=None):
-    candidates = deduped_representatives(bits)
-    if zero_policy == "force_zero":
-        candidates = [candidate for candidate in candidates if 0 in candidate]
-    elif zero_policy == "force_no_zero":
-        candidates = [candidate for candidate in candidates if 0 not in candidate]
-    elif zero_policy != "free":
-        raise ValueError(f"Unsupported zero policy: {zero_policy}")
+    candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
     if not candidates:
         raise ValueError(f"No SHARQ candidates remain for zero_policy={zero_policy}")
 
@@ -64,4 +59,5 @@ def select(hist, bin_centers, bits, zero_policy="free", clip_grid=None):
         score=float(scores[cand_idx, clip_idx].item()),
         best_zero_score=min(zero_scores) if zero_scores else float("inf"),
         best_no_zero_score=min(no_zero_scores) if no_zero_scores else float("inf"),
+        selector="histogram",
     )

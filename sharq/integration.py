@@ -31,6 +31,7 @@ def write_selection_artifacts(out_dir, records):
     for name, result, bits in records:
         selection[name] = {
             "bits": int(bits),
+            "selector": result.selector,
             "codebook": [int(z) for z in result.codebook],
             "clip": float(result.clip),
             "score": float(result.score),

@@ -32,3 +32,12 @@ def deduped_representatives(bits):
         reps.append(min(group, key=lambda c: (max(c), c)))
     return sorted(reps)
 
+
+def filter_by_zero_policy(candidates, zero_policy):
+    if zero_policy == "force_zero":
+        return [candidate for candidate in candidates if 0 in candidate]
+    if zero_policy == "force_no_zero":
+        return [candidate for candidate in candidates if 0 not in candidate]
+    if zero_policy == "free":
+        return list(candidates)
+    raise ValueError(f"Unsupported zero policy: {zero_policy}")

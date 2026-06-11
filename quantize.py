@@ -52,17 +52,26 @@ def boa_fwrd(llm, calib_data, qconfigs, boa_opts: dict, hyperparams: dict, args)
         if qconfigs["codebook"] == "sharq":
             for name in fp_layers:
                 module_name = f"layers.{i}.{name}"
-                selection, skipped = select_for_module(
-                    wrappers[name].layer.weight.data,
-                    wrappers[name].H_col,
-                    qconfigs["w_bits"],
-                    qconfigs["sharq_group_size"],
-                    qconfigs["sharq_hist_bins"],
-                    qconfigs["sharq_zero_policy"],
-                    sharq_clip_grid,
-                )
+                if qconfigs["sharq_selector"] == "direct":
+                    selection = wrappers[name].select_sharq_direct(
+                        qconfigs["w_bits"],
+                        qconfigs["sharq_group_size"],
+                        qconfigs["sharq_zero_policy"],
+                        sharq_clip_grid,
+                    )
+                    skipped = 0
+                else:
+                    selection, skipped = select_for_module(
+                        wrappers[name].layer.weight.data,
+                        wrappers[name].H_col,
+                        qconfigs["w_bits"],
+                        qconfigs["sharq_group_size"],
+                        qconfigs["sharq_hist_bins"],
+                        qconfigs["sharq_zero_policy"],
+                        sharq_clip_grid,
+                    )
                 print(
-                    f">>> SHARQ {module_name}: codebook={selection.codebook}, "
+                    f">>> SHARQ/{selection.selector} {module_name}: codebook={selection.codebook}, "
                     f"clip={selection.clip:.4f}, score={selection.score:.6e}, skipped_groups={skipped}"
                 )
                 wrappers[name].set_sharq(selection, qconfigs["sharq_group_size"])

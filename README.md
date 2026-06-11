@@ -23,6 +23,7 @@ python main.py \
   --llm_path <model> \
   --w_bits 4 \
   --codebook sharq \
+  --sharq_selector direct \
   --sharq_group_size 128 \
   --sharq_hist_bins 1024 \
   --sharq_out outputs/sharq-w4
@@ -44,6 +45,10 @@ Current implementation notes:
   additional permutation-aware mapping for group-wise input scales.
 - The core SHARQ modules live under `sharq/`; BoA is patched only at the
   quantization target boundary in `quantizers/boa.py`.
+- `--sharq_selector direct` is the accuracy-first selector. It scores each
+  candidate codebook on the actual BoA-preprocessed weights with BoA's Hessian
+  objective. `--sharq_selector histogram` keeps the earlier fast proxy for
+  ablations and optimization work.
 
 ## Validation
 
