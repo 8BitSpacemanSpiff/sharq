@@ -35,6 +35,33 @@ def _quantize_direct(W, codebook, clip, group_size):
     return torch.where(scale == 0, torch.zeros_like(q), q)
 
 
+def _quantize_direct_many_clips(W, codebook, clip_grid, group_size):
+    if group_size == -1:
+        group_size = W.shape[-1]
+    if W.shape[-1] % group_size != 0:
+        raise ValueError("SHARQ group_size must divide the input dimension.")
+    n_groups = W.shape[-1] // group_size
+    grouped = W.abs().view(*W.shape[:-1], n_groups, group_size)
+    gmax = grouped.amax(dim=-1)
+    base_scale = gmax / float(max(codebook))
+    scale = clip_grid[:, None, None, None] * base_scale[None, ...]
+    scale = scale.repeat_interleave(group_size, dim=-1)
+    safe_scale = torch.clamp(scale, min=torch.finfo(W.dtype).tiny)
+    t = W.unsqueeze(0) / safe_scale
+    levels = torch.tensor(
+        sorted(set([-int(z) for z in codebook] + [int(z) for z in codebook])),
+        dtype=W.dtype,
+        device=W.device,
+    )
+    idx_right = torch.searchsorted(levels.contiguous(), t.contiguous()).clamp(max=levels.numel() - 1)
+    idx_left = (idx_right - 1).clamp(min=0)
+    left = levels[idx_left]
+    right = levels[idx_right]
+    idx = torch.where((t - left).abs() <= (right - t).abs(), idx_left, idx_right)
+    q = safe_scale * levels[idx]
+    return torch.where(scale == 0, torch.zeros_like(q), q)
+
+
 def _hessian_score(err, H_col):
     if len(H_col.shape) == 2:
         H_col = H_col.unsqueeze(0)
@@ -55,6 +82,10 @@ def _score_row(err, H):
     return torch.sum((err @ H) * err).double()
 
 
+def _score_rows_many_clips(err, H_col):
+    return torch.einsum("chri,hij,chrj->chr", err, H_col, err).double()
+
+
 def select_direct(W, H_col, bits, group_size=-1, zero_policy="free", clip_grid=None, objective="hessian"):
     candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
     if not candidates:
@@ -62,6 +93,9 @@ def select_direct(W, H_col, bits, group_size=-1, zero_policy="free", clip_grid=N
     if clip_grid is None:
         clip_grid = CLIP_GRID[bits]
     clip_grid = clip_grid.to(device=W.device, dtype=W.dtype)
+
+    if objective == "hessian":
+        return _select_direct_gpu(W, H_col, candidates, group_size, clip_grid)
 
     best = None
     best_zero_score = float("inf")
@@ -93,6 +127,41 @@ def select_direct(W, H_col, bits, group_size=-1, zero_policy="free", clip_grid=N
     return best
 
 
+def _select_direct_gpu(W, H_col, candidates, group_size, clip_grid):
+    if len(H_col.shape) == 2:
+        H_col = H_col.unsqueeze(0)
+    best = None
+    best_zero_score = float("inf")
+    best_no_zero_score = float("inf")
+
+    for candidate in candidates:
+        q = _quantize_direct_many_clips(W, candidate, clip_grid, group_size)
+        err = q - W.unsqueeze(0)
+        scores = _score_rows_many_clips(err, H_col).sum(dim=(1, 2))
+        candidate_best_score, clip_idx = torch.min(scores, dim=0)
+        candidate_best = float(candidate_best_score.item())
+        candidate_best_clip = float(clip_grid[int(clip_idx.item())].item())
+        if 0 in candidate:
+            best_zero_score = min(best_zero_score, candidate_best)
+        else:
+            best_no_zero_score = min(best_no_zero_score, candidate_best)
+        if best is None or candidate_best < best.score:
+            best = SelectionResult(
+                codebook=tuple(int(z) for z in candidate),
+                clip=candidate_best_clip,
+                score=candidate_best,
+                best_zero_score=best_zero_score,
+                best_no_zero_score=best_no_zero_score,
+                selector="direct",
+                codebook_granularity="module",
+            )
+        del q, err, scores
+
+    best.best_zero_score = best_zero_score
+    best.best_no_zero_score = best_no_zero_score
+    return best
+
+
 def select_direct_channelwise(W, H_col, bits, group_size=-1, zero_policy="free", clip_grid=None):
     candidates = filter_by_zero_policy(deduped_representatives(bits), zero_policy)
     if not candidates:
@@ -104,58 +173,47 @@ def select_direct_channelwise(W, H_col, bits, group_size=-1, zero_policy="free",
         H_col = H_col.unsqueeze(0)
 
     n_heads, n_rows, _ = W.shape
-    channel_codebooks = []
-    channel_clips = torch.empty((n_heads, n_rows), dtype=torch.float32, device=W.device)
-    total_score = 0.0
-    best_zero_score = 0.0
-    best_no_zero_score = 0.0
+    best_scores = torch.full((n_heads, n_rows), float("inf"), dtype=torch.float64, device=W.device)
+    best_clips = torch.empty((n_heads, n_rows), dtype=torch.float32, device=W.device)
+    best_candidate_idx = torch.full((n_heads, n_rows), -1, dtype=torch.long, device=W.device)
+    best_zero_scores = torch.full_like(best_scores, float("inf"))
+    best_no_zero_scores = torch.full_like(best_scores, float("inf"))
 
+    for candidate_idx, candidate in enumerate(candidates):
+        q = _quantize_direct_many_clips(W, candidate, clip_grid, group_size)
+        err = q - W.unsqueeze(0)
+        scores = _score_rows_many_clips(err, H_col)
+        candidate_best_scores, clip_idx = torch.min(scores, dim=0)
+        if 0 in candidate:
+            best_zero_scores = torch.minimum(best_zero_scores, candidate_best_scores)
+        else:
+            best_no_zero_scores = torch.minimum(best_no_zero_scores, candidate_best_scores)
+        update = candidate_best_scores < best_scores
+        best_scores = torch.where(update, candidate_best_scores, best_scores)
+        best_clips = torch.where(update, clip_grid[clip_idx].float(), best_clips)
+        best_candidate_idx = torch.where(
+            update,
+            torch.full_like(best_candidate_idx, candidate_idx),
+            best_candidate_idx,
+        )
+        del q, err, scores
+
+    best_candidate_idx_cpu = best_candidate_idx.cpu()
+    channel_codebooks = []
     for h in range(n_heads):
         head_codebooks = []
-        H = H_col[h]
         for r in range(n_rows):
-            row = W[h:h + 1, r:r + 1, :]
-            row_best = None
-            row_best_zero = float("inf")
-            row_best_no_zero = float("inf")
-            for candidate in candidates:
-                candidate_best = float("inf")
-                candidate_best_clip = None
-                for clip in clip_grid:
-                    q = _quantize_direct(row, candidate, clip, group_size)
-                    score = float(_score_row(q.reshape(1, -1) - row.reshape(1, -1), H).item())
-                    if score < candidate_best:
-                        candidate_best = score
-                        candidate_best_clip = float(clip.item())
-                if 0 in candidate:
-                    row_best_zero = min(row_best_zero, candidate_best)
-                else:
-                    row_best_no_zero = min(row_best_no_zero, candidate_best)
-                if row_best is None or candidate_best < row_best.score:
-                    row_best = SelectionResult(
-                        codebook=tuple(int(z) for z in candidate),
-                        clip=candidate_best_clip,
-                        score=candidate_best,
-                        best_zero_score=row_best_zero,
-                        best_no_zero_score=row_best_no_zero,
-                        selector="direct",
-                        codebook_granularity="channel",
-                    )
-            head_codebooks.append(row_best.codebook)
-            channel_clips[h, r] = row_best.clip
-            total_score += row_best.score
-            best_zero_score += row_best_zero
-            best_no_zero_score += row_best_no_zero
+            head_codebooks.append(tuple(int(z) for z in candidates[int(best_candidate_idx_cpu[h, r].item())]))
         channel_codebooks.append(head_codebooks)
 
     return SelectionResult(
         codebook=tuple(),
-        clip=float(channel_clips.float().mean().item()),
-        score=float(total_score),
-        best_zero_score=float(best_zero_score),
-        best_no_zero_score=float(best_no_zero_score),
+        clip=float(best_clips.float().mean().item()),
+        score=float(best_scores.sum().item()),
+        best_zero_score=float(best_zero_scores.sum().item()),
+        best_no_zero_score=float(best_no_zero_scores.sum().item()),
         selector="direct",
         codebook_granularity="channel",
         channel_codebooks=channel_codebooks,
-        channel_clips=channel_clips.cpu(),
+        channel_clips=best_clips.cpu(),
     )
