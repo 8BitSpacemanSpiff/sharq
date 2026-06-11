@@ -25,6 +25,11 @@ def boa_fwrd(llm, calib_data, qconfigs, boa_opts: dict, hyperparams: dict, args)
     rotary_emb = get_rotary_emb(llm)
     rotary_matrix = get_rotary_matrix(rotary_emb, llm.config, block_kwargs['position_ids'].cpu()) if rotary_emb is not None else None    
     sharq_records = []
+    sharq_clip_grid = None
+    if qconfigs["codebook"] == "sharq" and qconfigs["sharq_clip_min"] is not None:
+        clip_max = qconfigs["sharq_clip_max"] if qconfigs["sharq_clip_max"] is not None else 1.0
+        clip_steps = qconfigs["sharq_clip_steps"] if qconfigs["sharq_clip_steps"] is not None else 16
+        sharq_clip_grid = torch.linspace(qconfigs["sharq_clip_min"], clip_max, clip_steps)
 
     # quantize each Transformer block
     for i in range(len(transformer_blocks)):
@@ -53,6 +58,8 @@ def boa_fwrd(llm, calib_data, qconfigs, boa_opts: dict, hyperparams: dict, args)
                     qconfigs["w_bits"],
                     qconfigs["sharq_group_size"],
                     qconfigs["sharq_hist_bins"],
+                    qconfigs["sharq_zero_policy"],
+                    sharq_clip_grid,
                 )
                 print(
                     f">>> SHARQ {module_name}: codebook={selection.codebook}, "

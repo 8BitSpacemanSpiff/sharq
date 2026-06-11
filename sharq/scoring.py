@@ -30,9 +30,20 @@ def score_all(hist, bin_centers, candidates, clip_grid):
     return scores
 
 
-def select(hist, bin_centers, bits):
+def select(hist, bin_centers, bits, zero_policy="free", clip_grid=None):
     candidates = deduped_representatives(bits)
-    clip_grid = CLIP_GRID[bits].to(bin_centers.device)
+    if zero_policy == "force_zero":
+        candidates = [candidate for candidate in candidates if 0 in candidate]
+    elif zero_policy == "force_no_zero":
+        candidates = [candidate for candidate in candidates if 0 not in candidate]
+    elif zero_policy != "free":
+        raise ValueError(f"Unsupported zero policy: {zero_policy}")
+    if not candidates:
+        raise ValueError(f"No SHARQ candidates remain for zero_policy={zero_policy}")
+
+    if clip_grid is None:
+        clip_grid = CLIP_GRID[bits]
+    clip_grid = clip_grid.to(bin_centers.device)
     scores = score_all(hist, bin_centers, candidates, clip_grid)
     flat_idx = int(torch.argmin(scores).item())
     cand_idx = flat_idx // scores.shape[1]
@@ -54,4 +65,3 @@ def select(hist, bin_centers, bits):
         best_zero_score=min(zero_scores) if zero_scores else float("inf"),
         best_no_zero_score=min(no_zero_scores) if no_zero_scores else float("inf"),
     )
-

@@ -14,10 +14,10 @@ def hessian_importance(H_col):
     return torch.diagonal(H_col, dim1=-2, dim2=-1).float().mean(dim=0)
 
 
-def select_for_module(weight, H_col, bits, group_size, hist_bins):
+def select_for_module(weight, H_col, bits, group_size, hist_bins, zero_policy="free", clip_grid=None):
     h = hessian_importance(H_col).to(weight.device)
     hist, centers, skipped = build_histogram(weight.float(), h, group_size=group_size, bins=hist_bins)
-    result = select(hist, centers, bits)
+    result = select(hist, centers, bits, zero_policy=zero_policy, clip_grid=clip_grid)
     return result, skipped
 
 
@@ -40,4 +40,3 @@ def write_selection_artifacts(out_dir, records):
         hw_meta.append(hardware_record(name, bits, result.codebook, result.clip))
     (out / "selection.json").write_text(json.dumps(selection, indent=2), encoding="utf-8")
     (out / "hw_meta.json").write_text(json.dumps(hw_meta, indent=2), encoding="utf-8")
-

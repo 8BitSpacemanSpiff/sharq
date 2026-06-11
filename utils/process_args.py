@@ -25,6 +25,10 @@ def get_boa_arguments(**parser_kwargs):
     parser.add_argument('--sharq_group_size', type=int, default=128)
     parser.add_argument('--sharq_hist_bins', type=int, default=1024)
     parser.add_argument('--sharq_out', type=str, default=None)
+    parser.add_argument('--sharq_zero_policy', type=str, default='free', choices=['free', 'force_zero', 'force_no_zero'])
+    parser.add_argument('--sharq_clip_min', type=float, default=None)
+    parser.add_argument('--sharq_clip_max', type=float, default=None)
+    parser.add_argument('--sharq_clip_steps', type=int, default=None)
     
     ## BoA Options
     parser.add_argument('--qparam_comput', type=str, default='Hessian', choices=['MinMax', 'MMSE', 'Hessian'], help="How to determine Quant. Params")
@@ -60,6 +64,10 @@ def get_boa_weight_quant_infos(args):
         "codebook": args.codebook,
         "sharq_group_size": args.sharq_group_size,
         "sharq_hist_bins": args.sharq_hist_bins,
+        "sharq_zero_policy": args.sharq_zero_policy,
+        "sharq_clip_min": args.sharq_clip_min,
+        "sharq_clip_max": args.sharq_clip_max,
+        "sharq_clip_steps": args.sharq_clip_steps,
     }
     boa_opts = {
         "qparam_comput": args.qparam_comput,
