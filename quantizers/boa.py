@@ -78,7 +78,7 @@ class BoA:
         self.layer.weight.data = Q.reshape(self.org_shape).to(self.org_dtype)
 
 
-    def gptq(self, W, H_col, scale, zero, return_err=False):
+    def gptq(self, W, H_col, scale, zero, return_err=False, row_offset=0):
         U_col = get_cholesky_of_inverse(H_col)
         Q = torch.zeros_like(W)
         Err = torch.zeros_like(W)
@@ -87,7 +87,7 @@ class BoA:
             w = W[..., idx_col].unsqueeze(-1)
             scale_col = self._scale_at_col(scale, idx_col)
             zero_col = self._scale_at_col(zero, idx_col)
-            q = self._fake_quantize(w, scale_col, zero_col)
+            q = self._fake_quantize(w, scale_col, zero_col, row_offset=row_offset)
             Q[..., idx_col] = q.squeeze(-1)
 
             # error compensation
@@ -108,7 +108,14 @@ class BoA:
         for idx_row in range(W.shape[1]):
             # quantization
             W_sub = W[:, idx_row, :].unsqueeze(-2)
-            Q_sub, Err = self.gptq(W_sub, H_col, scale[:, idx_row, :].unsqueeze(-2), zero[:, idx_row, :].unsqueeze(-2), return_err=True)
+            Q_sub, Err = self.gptq(
+                W_sub,
+                H_col,
+                scale[:, idx_row, :].unsqueeze(-2),
+                zero[:, idx_row, :].unsqueeze(-2),
+                return_err=True,
+                row_offset=idx_row,
+            )
             Q[:, idx_row, :] = Q_sub.squeeze(-2)
 
             # error compensation
@@ -129,20 +136,21 @@ class BoA:
         return select_direct(W, H_col, bits, group_size, zero_policy, clip_grid, objective="hessian")
 
 
-    def _fake_quantize(self, w, scale, zero):
+    def _fake_quantize(self, w, scale, zero, row_offset=0):
         if self.sharq_selection is None:
             return fake_quantize(w, scale, zero, self.quantizer.maxq)
         if self.sharq_selection.codebook_granularity == "channel":
-            return self._fake_quantize_channelwise(w, scale)
+            return self._fake_quantize_channelwise(w, scale, row_offset)
         levels = build_signed_levels(self.sharq_selection.codebook, device=w.device, dtype=w.dtype)
         q, _ = quantize_to_codebook(w, scale, levels)
         return q
 
 
-    def _fake_quantize_channelwise(self, w, scale):
+    def _fake_quantize_channelwise(self, w, scale, row_offset):
         q = torch.empty_like(w)
         for h, head_codebooks in enumerate(self.sharq_selection.channel_codebooks):
-            for r, codebook in enumerate(head_codebooks):
+            for r in range(w.shape[1]):
+                codebook = head_codebooks[row_offset + r]
                 levels = build_signed_levels(codebook, device=w.device, dtype=w.dtype)
                 q[h, r, :], _ = quantize_to_codebook(w[h, r, :], scale[h, r, :], levels)
         return q
