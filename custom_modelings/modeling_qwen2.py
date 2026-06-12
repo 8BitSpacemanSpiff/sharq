@@ -4,6 +4,7 @@
 #             the file from the modular. If any change should be done, please apply the change to the
 #                          modular_qwen2.py file directly. One of our CI enforces this.
 #                🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨
+import inspect
 from typing import Callable, Optional, TypedDict, Union
 
 import torch
@@ -48,8 +49,14 @@ from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 
 
 def _call_mask_compat(mask_fn, **kwargs):
+    def accepted(call_kwargs):
+        signature = inspect.signature(mask_fn)
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return call_kwargs
+        return {key: value for key, value in call_kwargs.items() if key in signature.parameters}
+
     try:
-        return mask_fn(**kwargs)
+        return mask_fn(**accepted(kwargs))
     except TypeError as exc:
         if "input_embeds" not in str(exc):
             raise
@@ -59,10 +66,10 @@ def _call_mask_compat(mask_fn, **kwargs):
         compat_kwargs["input_ids_shape"] = input_embeds.shape[:2]
         compat_kwargs["inputs_embeds"] = input_embeds
         try:
-            return mask_fn(**compat_kwargs)
+            return mask_fn(**accepted(compat_kwargs))
         except TypeError:
             compat_kwargs.pop("inputs_embeds", None)
-            return mask_fn(**compat_kwargs)
+            return mask_fn(**accepted(compat_kwargs))
 
 
 if "default" not in ROPE_INIT_FUNCTIONS:

@@ -19,6 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 from typing import Callable, Optional, TypedDict, Union
 
 import torch
@@ -63,8 +64,14 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 
 def _call_mask_compat(mask_fn, **kwargs):
+    def accepted(call_kwargs):
+        signature = inspect.signature(mask_fn)
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return call_kwargs
+        return {key: value for key, value in call_kwargs.items() if key in signature.parameters}
+
     try:
-        return mask_fn(**kwargs)
+        return mask_fn(**accepted(kwargs))
     except TypeError as exc:
         if "input_embeds" not in str(exc):
             raise
@@ -74,10 +81,10 @@ def _call_mask_compat(mask_fn, **kwargs):
         compat_kwargs["input_ids_shape"] = input_embeds.shape[:2]
         compat_kwargs["inputs_embeds"] = input_embeds
         try:
-            return mask_fn(**compat_kwargs)
+            return mask_fn(**accepted(compat_kwargs))
         except TypeError:
             compat_kwargs.pop("inputs_embeds", None)
-            return mask_fn(**compat_kwargs)
+            return mask_fn(**accepted(compat_kwargs))
 
 
 if "default" not in ROPE_INIT_FUNCTIONS:
