@@ -49,6 +49,12 @@ from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 
 
 def _call_mask_compat(mask_fn, **kwargs):
+    if "input_embeds" in kwargs:
+        input_embeds = kwargs["input_embeds"]
+        kwargs = dict(kwargs)
+        kwargs.setdefault("inputs_embeds", input_embeds)
+        kwargs.setdefault("input_ids_shape", input_embeds.shape[:2])
+
     def accepted(call_kwargs):
         signature = inspect.signature(mask_fn)
         if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
@@ -58,13 +64,13 @@ def _call_mask_compat(mask_fn, **kwargs):
     try:
         return mask_fn(**accepted(kwargs))
     except TypeError as exc:
-        if "input_embeds" not in str(exc):
+        if "input_embeds" not in str(exc) and "inputs_embeds" not in str(exc):
             raise
         input_embeds = kwargs["input_embeds"]
         compat_kwargs = dict(kwargs)
         compat_kwargs.pop("input_embeds", None)
-        compat_kwargs["input_ids_shape"] = input_embeds.shape[:2]
-        compat_kwargs["inputs_embeds"] = input_embeds
+        compat_kwargs.setdefault("input_ids_shape", input_embeds.shape[:2])
+        compat_kwargs.setdefault("inputs_embeds", input_embeds)
         try:
             return mask_fn(**accepted(compat_kwargs))
         except TypeError:
