@@ -17,7 +17,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, TypedDict, Union
 
 import torch
 import torch.utils.checkpoint
@@ -40,7 +40,24 @@ from transformers.modeling_outputs import (
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, auto_docstring, can_return_tuple, logging
+from transformers.utils import logging
+try:
+    from transformers.utils import LossKwargs, auto_docstring, can_return_tuple
+except ImportError:
+    class LossKwargs(TypedDict, total=False):
+        pass
+
+    def auto_docstring(*args, **kwargs):
+        if args and len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+
+        def decorator(obj):
+            return obj
+
+        return decorator
+
+    def can_return_tuple(func):
+        return func
 from transformers.models.llama.configuration_llama import LlamaConfig
 
 

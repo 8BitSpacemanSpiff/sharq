@@ -4,7 +4,7 @@
 #             the file from the modular. If any change should be done, please apply the change to the
 #                          modular_qwen2.py file directly. One of our CI enforces this.
 #                🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, TypedDict, Union
 
 import torch
 from torch import nn
@@ -26,7 +26,24 @@ from transformers.modeling_outputs import (
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
-from transformers.utils import LossKwargs, auto_docstring, can_return_tuple, logging
+from transformers.utils import logging
+try:
+    from transformers.utils import LossKwargs, auto_docstring, can_return_tuple
+except ImportError:
+    class LossKwargs(TypedDict, total=False):
+        pass
+
+    def auto_docstring(*args, **kwargs):
+        if args and len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+
+        def decorator(obj):
+            return obj
+
+        return decorator
+
+    def can_return_tuple(func):
+        return func
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 
 
