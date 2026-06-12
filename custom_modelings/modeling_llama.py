@@ -61,6 +61,24 @@ except ImportError:
 from transformers.models.llama.configuration_llama import LlamaConfig
 
 
+def _call_mask_compat(mask_fn, **kwargs):
+    try:
+        return mask_fn(**kwargs)
+    except TypeError as exc:
+        if "input_embeds" not in str(exc):
+            raise
+        input_embeds = kwargs["input_embeds"]
+        compat_kwargs = dict(kwargs)
+        compat_kwargs.pop("input_embeds", None)
+        compat_kwargs["input_ids_shape"] = input_embeds.shape[:2]
+        compat_kwargs["inputs_embeds"] = input_embeds
+        try:
+            return mask_fn(**compat_kwargs)
+        except TypeError:
+            compat_kwargs.pop("inputs_embeds", None)
+            return mask_fn(**compat_kwargs)
+
+
 if "default" not in ROPE_INIT_FUNCTIONS:
     def _compute_default_rope_parameters(config, device, seq_len=None, **rope_kwargs):
         base = getattr(config, "rope_theta", 10000.0)
@@ -455,7 +473,8 @@ class LlamaModel(LlamaPreTrainedModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        causal_mask = create_causal_mask(
+        causal_mask = _call_mask_compat(
+            create_causal_mask,
             config=self.config,
             input_embeds=inputs_embeds,
             attention_mask=attention_mask,
