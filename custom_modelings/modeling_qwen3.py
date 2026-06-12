@@ -62,6 +62,16 @@ except ImportError:
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 
+if "default" not in ROPE_INIT_FUNCTIONS:
+    def _compute_default_rope_parameters(config, device, seq_len=None, **rope_kwargs):
+        base = getattr(config, "rope_theta", 10000.0)
+        dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
+        return inv_freq, 1.0
+
+    ROPE_INIT_FUNCTIONS["default"] = _compute_default_rope_parameters
+
+
 logger = logging.get_logger(__name__)
 
 
