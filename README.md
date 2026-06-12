@@ -240,6 +240,192 @@ If free zero/no-zero selection is unstable, rerun the same command with:
 --sharq_zero_policy force_zero
 ```
 
+## Qwen2.5-7B Paper-Scale Track
+
+Use this track for the next W3 experiments. The goal is to first reproduce a
+strong uniform BoA baseline on Qwen2.5-7B with paper-scale calibration, then run
+the online SHARQ selector against the fair matching uniform configuration.
+
+### Fresh VM Setup
+
+```bash
+git clone https://github.com/8BitSpacemanSpiff/sharq.git
+cd sharq
+
+python -m venv .venv
+source .venv/bin/activate
+
+pip install --upgrade pip
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+pip install pytest
+```
+
+If Hugging Face rate limits or gated model access become an issue:
+
+```bash
+huggingface-cli login
+```
+
+or:
+
+```bash
+export HF_TOKEN=<your_token>
+```
+
+Verify the environment sees the GPU:
+
+```bash
+python - <<'PY'
+import torch
+print("torch", torch.__version__)
+print("cuda", torch.version.cuda)
+print("available", torch.cuda.is_available())
+print("device", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none")
+PY
+```
+
+Watch the run from another terminal:
+
+```bash
+watch -n 1 nvidia-smi
+```
+
+Run the unit tests once:
+
+```bash
+python -m pytest tests
+```
+
+Create output folders:
+
+```bash
+mkdir -p logs outputs
+```
+
+### Quick Qwen Sanity Run
+
+Use this before launching the full 128-sample run. It should reach the first
+transformer block quickly and confirms the Qwen custom modeling path works on
+the instance.
+
+```bash
+python main.py \
+  --llm_path Qwen/Qwen2.5-7B \
+  --w_bits 3 \
+  --codebook uniform \
+  --calib_data c4 \
+  --nsamples 4 \
+  --seqlen 512 \
+  --qparam_comput Hessian \
+  --block_v \
+  --act_order_row \
+  --act_order_col \
+  2>&1 | tee logs/qwen25-7b-uniform-w3-smoke.log
+```
+
+### Paper-Style Uniform Baseline
+
+This is the stronger upstream-style BoA W3 baseline. It uses both column and row
+activation ordering.
+
+```bash
+python main.py \
+  --llm_path Qwen/Qwen2.5-7B \
+  --w_bits 3 \
+  --codebook uniform \
+  --calib_data c4 \
+  --nsamples 128 \
+  --seqlen 2048 \
+  --qparam_comput Hessian \
+  --block_v \
+  --act_order_row \
+  --act_order_col \
+  2>&1 | tee logs/qwen25-7b-uniform-w3-paper.log
+```
+
+### Fair Uniform Baseline For SHARQ
+
+SHARQ currently does not support `--act_order_col`, so this run is the fair
+apples-to-apples uniform baseline for SHARQ comparisons.
+
+```bash
+python main.py \
+  --llm_path Qwen/Qwen2.5-7B \
+  --w_bits 3 \
+  --codebook uniform \
+  --calib_data c4 \
+  --nsamples 128 \
+  --seqlen 2048 \
+  --qparam_comput Hessian \
+  --block_v \
+  --act_order_row \
+  2>&1 | tee logs/qwen25-7b-uniform-w3-fair.log
+```
+
+### SHARQ W3 Online Top-1
+
+This is the primary SHARQ run. It keeps BoA's uniform scale search, shortlists
+the best legal SHARQ codebook, and chooses between uniform and SHARQ levels
+inside the BoA compensation loop.
+
+```bash
+python main.py \
+  --llm_path Qwen/Qwen2.5-7B \
+  --w_bits 3 \
+  --codebook sharq \
+  --sharq_selector uniform_scale \
+  --sharq_zero_policy free \
+  --sharq_topk_candidates 1 \
+  --sharq_out outputs/qwen25-7b-sharq-w3-online-top1 \
+  --calib_data c4 \
+  --nsamples 128 \
+  --seqlen 2048 \
+  --qparam_comput Hessian \
+  --block_v \
+  --act_order_row \
+  2>&1 | tee logs/qwen25-7b-sharq-w3-online-top1.log
+```
+
+### Optional SHARQ W3 Online Top-3
+
+Run this only after top-1 completes. It is slower, but can improve PPL by giving
+the online selector more legal codebooks to compare.
+
+```bash
+python main.py \
+  --llm_path Qwen/Qwen2.5-7B \
+  --w_bits 3 \
+  --codebook sharq \
+  --sharq_selector uniform_scale \
+  --sharq_zero_policy free \
+  --sharq_topk_candidates 3 \
+  --sharq_out outputs/qwen25-7b-sharq-w3-online-top3 \
+  --calib_data c4 \
+  --nsamples 128 \
+  --seqlen 2048 \
+  --qparam_comput Hessian \
+  --block_v \
+  --act_order_row \
+  2>&1 | tee logs/qwen25-7b-sharq-w3-online-top3.log
+```
+
+### Runtime Notes
+
+After `Start quantization`, the code first captures the inputs to the first
+transformer block over all calibration samples. For `nsamples=128` and
+`seqlen=2048`, this can be quiet for a while before the first layer line:
+
+```text
+>>>> Quantizing 1-th Transformer Block.... (1/28)
+```
+
+During that stage, `nvidia-smi` should still show a Python process using GPU
+memory and nonzero utilization. The implementation uses BoA's simultaneous-head
+path once block quantization begins: weights are reshaped to
+`[num_heads, head_dim, hidden_size]`, so heads are processed in a batched tensor
+rather than one head at a time.
+
 The original BoA README follows for upstream context.
 
 # BoA
